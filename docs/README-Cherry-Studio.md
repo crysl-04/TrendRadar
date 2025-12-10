@@ -149,6 +149,6 @@ cd 你的项目名
 然后在 Cherry Studio 中配置：
 
 ```
-类型: streamableHttp
-URL: http://localhost:3333/mcp
+类型: sse
+URL: http://localhost:3333/sse
 ```

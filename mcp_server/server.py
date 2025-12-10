@@ -728,12 +728,12 @@ def run_server(
     if transport == 'stdio':
         mcp.run(transport='stdio')
     elif transport == 'http':
-        # HTTP 模式（生产推荐）
+        # HTTP 模式(生产推荐) - 使用 sse 传输模式
+        # 注意: FastMCP 2.12-2.14 的 streamable-http 存在bug,改用sse
         mcp.run(
-            transport='http',
+            transport='sse',
             host=host,
-            port=port,
-            path='/mcp'  # HTTP 端点路径
+            port=port
         )
     else:
         raise ValueError(f"不支持的传输模式: {transport}")

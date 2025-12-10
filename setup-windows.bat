@@ -2,9 +2,14 @@
 chcp 65001 >nul
 setlocal enabledelayedexpansion
 
+REM 配置 UV 使用国内镜像源加速 Python 下载
+REM 注意:某些Python版本可能在镜像源中不可用,如遇404错误将自动切换到官方源
+set "UV_PYTHON_INSTALL_MIRROR=https://github.com/indygreg/python-build-standalone/releases/download"
+
 echo ==========================================
 echo   TrendRadar MCP 一键部署 (Windows)
 echo ==========================================
+echo 🚀 已配置 Python 下载源
 echo.
 
 REM 修复：使用脚本所在目录，而不是当前工作目录
