@@ -392,6 +392,9 @@ def load_config():
     else:
         print("未配置任何通知渠道")
 
+    # 加载多用户配置
+    config["USER_GROUPS"] = config_data.get("notification", {}).get("user_groups", {})
+
     return config
 
 
@@ -399,6 +402,8 @@ print("正在加载配置...")
 CONFIG = load_config()
 print(f"TrendRadar v{VERSION} 配置加载完成")
 print(f"监控平台数量: {len(CONFIG['PLATFORMS'])}")
+print(f"DEBUG: USER_GROUPS配置 = {CONFIG.get('USER_GROUPS', {})}")
+print(f"DEBUG: USER_GROUPS enabled = {CONFIG.get('USER_GROUPS', {}).get('enabled', False)}")
 
 
 # === 工具函数 ===
@@ -5277,10 +5282,188 @@ class NewsAnalyzer:
 
         return results, id_to_name, failed_ids
 
+    def _execute_multi_user_mode(
+        self,
+        mode_strategy: Dict,
+        results: Dict,
+        id_to_name: Dict,
+        failed_ids: List,
+        user_groups_config: Dict,
+    ) -> Optional[str]:
+        """执行多用户配置模式"""
+        print("\n=== 🎯 多用户配置模式已启用 ===")
+        
+        groups = user_groups_config.get("groups", [])
+        if not groups:
+            print("⚠️ 警告：多用户配置已启用但未配置任何用户组，回退到单用户模式")
+            return None
+        
+        print(f"配置的用户组数量: {len(groups)}")
+        
+        # 获取当前监控平台ID列表
+        current_platform_ids = [platform["id"] for platform in CONFIG["PLATFORMS"]]
+        new_titles = detect_latest_new_titles(current_platform_ids)
+        time_info = Path(save_titles_to_file(results, id_to_name, failed_ids)).stem
+        
+        # 为每个用户组独立处理
+        for idx, group in enumerate(groups, 1):
+            group_name = group.get("name", f"用户组{idx}")
+            frequency_file = group.get("frequency_words_file")
+            group_webhooks = group.get("webhooks", {})
+            
+            print(f"\n--- 处理用户组 [{group_name}] ---")
+            
+            if not frequency_file:
+                print(f"⚠️ 用户组 [{group_name}] 未配置关键词文件，跳过")
+                continue
+            
+            # 检查关键词文件是否存在
+            if not Path(frequency_file).exists():
+                print(f"⚠️ 用户组 [{group_name}] 的关键词文件不存在: {frequency_file}")
+                continue
+            
+            # 加载该用户组的关键词配置
+            try:
+                word_groups, filter_words, global_filters = load_frequency_words(frequency_file)
+                print(f"已加载关键词文件: {frequency_file}")
+            except Exception as e:
+                print(f"❌ 加载关键词文件失败: {e}")
+                continue
+            
+            # 使用该用户组的关键词进行分析
+            if self.report_mode == "current":
+                analysis_data = self._load_analysis_data()
+                if analysis_data:
+                    (
+                        all_results,
+                        historical_id_to_name,
+                        historical_title_info,
+                        historical_new_titles,
+                        _,
+                        _,
+                        _,
+                    ) = analysis_data
+                    
+                    stats, html_file = self._run_analysis_pipeline(
+                        all_results,
+                        self.report_mode,
+                        historical_title_info,
+                        historical_new_titles,
+                        word_groups,
+                        filter_words,
+                        historical_id_to_name,
+                        failed_ids=failed_ids,
+                        global_filters=global_filters,
+                    )
+                    
+                    combined_id_to_name = {**historical_id_to_name, **id_to_name}
+                    
+                    # 使用该用户组的推送配置发送通知
+                    if mode_strategy["should_send_realtime"]:
+                        self._send_notification_for_user_group(
+                            stats,
+                            mode_strategy["realtime_report_type"],
+                            self.report_mode,
+                            group_name,
+                            group_webhooks,
+                            failed_ids=failed_ids,
+                            new_titles=historical_new_titles,
+                            id_to_name=combined_id_to_name,
+                            html_file_path=html_file,
+                        )
+            else:
+                title_info = self._prepare_current_title_info(results, time_info)
+                print(f"DEBUG: 准备调用_run_analysis_pipeline, word_groups数量={len(word_groups)}")
+                stats, html_file = self._run_analysis_pipeline(
+                    results,
+                    self.report_mode,
+                    title_info,
+                    new_titles,
+                    word_groups,
+                    filter_words,
+                    id_to_name,
+                    failed_ids=failed_ids,
+                    global_filters=global_filters,
+                )
+                # 多用户模式下,无论report_mode是什么,都应该实时推送给对应用户组
+                self._send_notification_for_user_group(
+                        stats,
+                        mode_strategy["realtime_report_type"],
+                        self.report_mode,
+                        group_name,
+                        group_webhooks,
+                        failed_ids=failed_ids,
+                        new_titles=new_titles,
+                        id_to_name=id_to_name,
+                        html_file_path=html_file,
+                    )
+        
+        print("\n=== ✅ 多用户配置处理完成 ===")
+        return None
+    
+    def _send_notification_for_user_group(
+        self,
+        stats: List[Dict],
+        report_type: str,
+        mode: str,
+        group_name: str,
+        group_webhooks: Dict,
+        failed_ids: Optional[List] = None,
+        new_titles: Optional[Dict] = None,
+        id_to_name: Optional[Dict] = None,
+        html_file_path: Optional[str] = None,
+    ) -> None:
+        """为特定用户组发送通知"""
+        if not group_webhooks:
+            print(f"用户组 [{group_name}] 未配置推送渠道,跳过推送")
+            return
+        
+        # 检查是否有有效内容
+        if not self._has_valid_content(stats, new_titles):
+            print(f"用户组 [{group_name}] 没有匹配的新闻内容，跳过推送")
+            return
+        
+        # 临时保存原有CONFIG中的webhook配置
+        original_webhooks = {}
+        for key in group_webhooks:
+            config_key = key.upper()
+            if config_key in CONFIG:
+                original_webhooks[config_key] = CONFIG[config_key]
+        
+        # 临时替换为该用户组的webhook配置
+        for key, value in group_webhooks.items():
+            config_key = key.upper()
+            CONFIG[config_key] = value
+        
+        try:
+            # 调用原有的推送逻辑
+            print(f"正在为用户组 [{group_name}] 推送通知...")
+            self._send_notification_if_needed(
+                stats,
+                report_type,
+                mode,
+                failed_ids=failed_ids,
+                new_titles=new_titles,
+                id_to_name=id_to_name,
+                html_file_path=html_file_path,
+            )
+        finally:
+            # 恢复原有的webhook配置
+            for config_key, original_value in original_webhooks.items():
+                CONFIG[config_key] = original_value
+    
     def _execute_mode_strategy(
         self, mode_strategy: Dict, results: Dict, id_to_name: Dict, failed_ids: List
     ) -> Optional[str]:
         """执行模式特定逻辑"""
+        # 检查是否启用多用户配置
+        user_groups_config = CONFIG.get("USER_GROUPS", {})
+        if user_groups_config.get("enabled", False):
+            return self._execute_multi_user_mode(
+                mode_strategy, results, id_to_name, failed_ids, user_groups_config
+            )
+        
+        # 原有的单用户模式逻辑
         # 获取当前监控平台ID列表
         current_platform_ids = [platform["id"] for platform in CONFIG["PLATFORMS"]]
 
