@@ -1,11 +1,11 @@
-# 配置文件(包含个人敏感信息)
-/config/config.yaml
-/config/frequency_words.txt
-/config/frequency_words copy.txt
+# # 配置文件(包含个人敏感信息)
+# /config/config.yaml
+# /config/frequency_words.txt
+# /config/frequency_words copy.txt
 
-# 多用户配置文件(包含不同用户组的关键词配置)
-/config/user_*.txt
-/config/frequency_words_*.txt
+# # 多用户配置文件(包含不同用户组的关键词配置)
+# /config/user_*.txt
+# /config/frequency_words_*.txt
 
 # 运行时生成的文件
 /output
